@@ -1,0 +1,92 @@
+#!/bin/bash
+# (c) Alexander Kolesnikov, 2018
+#
+# Script for avoiding provider traffic blocking and routing blocked HTTP(s) traffic via TOR.
+# Also script adds specific routes to OpenVPN CCD files.
+#
+# Installation
+#
+# Check path (see code) to your binary tools: awk, sed, xargs, echo, ip.
+# Add to iptables NAT table this rules (assuming your TOR on port 9040):
+#  - for forwarded traffic: iptables -t nat -I PREROUTING 1 -p tcp -m multiport --dports 80,443 -m set --match-set blacklist dst -j REDIRECT --to-ports 9040
+#  - for local traffic: iptables -t nat -I OUTPUT 1 -p tcp -m multiport --dports 80,443 -m set --match-set blacklist dst -j REDIRECT --to-ports 9040
+
+#
+# Settings
+#
+# File with list of blacklisted domain names (www. and m. subdomains add automatically)
+BLFILE="/var/local/blacklist.txt"
+
+# DNS servers for resolve
+SERVERS="127.0.0.1
+8.8.8.8"
+
+# prefixes to add for doamin
+PREFIXES=("" "www." "m.")
+
+# OpenVPN CCD dir path and config list
+CCD="/etc/openvpn/ccd"
+CCFILES="client01
+client02"
+
+#
+# main code
+#
+
+BLACKLIST=$(cat $BLFILE)
+
+IFS=$'\n'
+IPLIST=""
+for SERVER in $SERVERS
+do
+	for PREFIX in "${PREFIXES[@]}"; do
+
+		IPLIST="$IPLIST\n$(echo -e "$BLACKLIST" | /usr/bin/sed -e 's/^/'$PREFIX'/' | /bin/xargs -n1 dig +noall +answer +short +time=1 +tries=1 @SERVER A | /usr/bin/grep -oE "\b([0-9]{1,3}\.){3}[0-9]{1,3}\b")"
+	done
+done
+
+# remove empty lines
+IPLIST=$(echo -e "$IPLIST" | sed '/^$/d')
+
+# create ipset (if not exist)
+/sbin/ipset -exist create blacklist hash:net
+
+# adding to ipset
+/usr/bin/echo -e "$IPLIST" | /bin/xargs -n1 /usr/sbin/ipset add -exist blacklist
+
+# adding to openvpn client routes
+# get actual list with uniq IPs from ipset
+IPLIST=$(/usr/sbin/ipset save blacklist | /usr/bin/grep add | grep -v / | /usr/bin/awk '{ print $3 }')
+
+IFS=$'\n'
+
+# add trailing slash
+[[ "${CCD}" != */ ]] && CCD="${CCD}/"
+
+lead="#--==||==-- DO NOT EDIT after this line. it updates by ipset_bl script"
+newContent=''
+for IP in $IPLIST
+do
+	if [[ $IP =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+	        newContent="$newContent\npush \"route $IP 255.255.255.255 192.168.200.1\""
+	fi
+done
+
+for CCFILE in $CCFILES
+do
+
+LINE=$(grep -n "#--==||==--" $CCD$CCFILE | cut -d: -f 1)
+
+if [[ "$LINE" -gt "1" ]]; then
+
+	head -n $LINE $CCD$CCFILE > $CCD$CCFILE.tmp
+else
+	cp  $CCD$CCFILE $CCD$CCFILE.tmp
+	echo -e "\n$lead" >> $CCD$CCFILE.tmp
+fi
+
+echo -e $newContent >> $CCD$CCFILE.tmp
+
+mv $CCD$CCFILE.tmp $CCD$CCFILE
+
+done
