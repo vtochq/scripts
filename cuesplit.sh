@@ -6,7 +6,7 @@
 
 if [ -z "$1" ]; then
 	echo "Usage: cuesplit.sh <path to media file (flac, ape, wav, ..)>"
-	echo "Dependencies: shnsplit cuetag.sh metaflac"
+	echo "Dependencies: shnsplit, cuetools (cuerpint, cuetag.sh), metaflac"
 	echo -e "May be used recursively:\n\$ find <path to dir> -type f -name *.flac -size +150M -exec ./cuesplit.sh "{}" \;\nIt will try to split all flac files greater than 150MB."
 	exit
 fi
@@ -28,10 +28,10 @@ if [ ! -f "$cue" ]; then
 	if [ -f "$cue" ]; then
 		echo "Trying first cue file in dir: $cue"
 	else
+		echo "CUE not found again. Exit."
 		exit
 	fi
 fi
-
 
 echo "Splitting $1 file"
 
@@ -39,7 +39,7 @@ echo "Splitting $1 file"
 shnsplit -o $ext -d "$dir" -f "$cue" "$1"
 
 #Tagging
-cuetag.sh "$cue" "$dir"/split-*.$ext
+./cuetag.sh "$cue" "$dir"/split-*.$ext
 
 # Renaming
 for a in "$dir"/split-*.$ext; do
